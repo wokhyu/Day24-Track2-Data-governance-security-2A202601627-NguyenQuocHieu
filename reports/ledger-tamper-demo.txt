@@ -1,0 +1,14 @@
+== Ledger 3 dong, chua dung vao ==
+  [0] tool=search_docs    decision=allow prev=000000000000... hash=ec2a942c72bc...
+  [1] tool=read_customer  decision=allow prev=ec2a942c72bc... hash=b5672db3fd7f...
+  [2] tool=http_post      decision=deny  prev=b5672db3fd7f... hash=a4242c6c425a...
+  verify() = True
+
+== Sua DUNG 1 ky tu o dong giua: decision 'allow' -> 'allo_' ==
+  verify() = False   <- phat hien duoc
+
+== Xoa han dong giua (khong sua gi khac) ==
+  verify() = False   <- chuoi prev_hash dut, phat hien duoc
+
+== Dong dung format nhung reason rong ==
+  verify() = False   <- audit completeness < 100%
