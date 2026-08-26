@@ -85,9 +85,12 @@ class RunAResult:
     """
 
     ticket_ids: tuple[int, ...]
-    doc_ids: tuple[str, ...]
+    redacted_docs: tuple[tuple[str, str], ...]
     injection: object | None
-    pii_count: int
+
+    @property
+    def doc_ids(self) -> tuple[str, ...]:
+        return tuple(doc_id for doc_id, _ in self.redacted_docs)
 
 
 def _now() -> str:
@@ -163,7 +166,7 @@ def _run_a(message: str, llm, run_id: str, ledger_path: Path) -> RunAResult:
         ledger_path=ledger_path,
     )
     if not allowed:
-        return RunAResult(ticket_ids=(), doc_ids=(), injection=None, pii_count=0)
+        return RunAResult(ticket_ids=(), redacted_docs=(), injection=None)
 
     docs = tools.search_docs(message)
 
@@ -175,14 +178,61 @@ def _run_a(message: str, llm, run_id: str, ledger_path: Path) -> RunAResult:
         int(m.group(1)) for d in docs if (m := TICKET_ID_RE.search(d["id"]))
     })
 
-    combined = "\n\n".join(d["text"] for d in docs)
+    raw_combined = "\n\n".join(d["text"] for d in docs)
 
-    # PII gate (BƯỚC 3a): đếm PII trong untrusted content để ghi vào audit.
-    # Không đưa giá trị thật vào ledger — chỉ số lượng.
-    pii_count = len(pii.detect(combined))
+    # --- PII gate (BƯỚC 3a), chạy TRƯỚC khi text chạm vào model ---
+    #
+    # "Trước ingestion" theo đúng nghĩa đen: `raw_combined` không đi đâu nữa
+    # sau dòng này. Cả hai đường vào model — `find_injection()` và
+    # `summarize()` — đều chỉ nhận bản đã redact. Với --mock thì khác biệt
+    # không quan sát được (MockLLM.summarize chỉ dùng tên file), nhưng với
+    # `--model claude-...` thì đây chính là chỗ CCCD/STK/SĐT dừng lại thay vì
+    # bay sang API của provider (xem reports/dpia-lite.md §3.4).
+    #
+    # Redact KHÔNG làm hỏng việc phát hiện injection: pii.detect() chỉ nhận 4
+    # loại entity (EMAIL, VN_BANK_ACCOUNT, VN_CCCD, VN_PHONE), không đụng tới
+    # marker chỉ thị, tới mã khách dạng `KH-\d{6}`, hay tới URL — tức là mọi
+    # thứ `llm.find_injection()` cần vẫn còn nguyên.
+    pii_entities = pii.detect(raw_combined)
+    redacted_docs = tuple((d["id"], pii.sanitize(d["text"])) for d in docs)
+    combined = "\n\n".join(text for _, text in redacted_docs)
+
+    by_type: dict[str, int] = {}
+    for entity in pii_entities:
+        by_type[entity["type"]] = by_type.get(entity["type"], 0) + 1
+
+    if pii_entities:
+        breakdown = ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
+        gate_reason = (
+            f"PII gate trên {len(docs)} document trước khi vào context: "
+            f"redact {len(pii_entities)} entity ({breakdown}) — "
+            f"giá trị thật KHÔNG đi tiếp và KHÔNG vào ledger"
+        )
+    else:
+        gate_reason = f"PII gate trên {len(docs)} document: không phát hiện entity nào"
+
+    ledger.append(
+        {
+            "ts": _now(),
+            "agent_id": AGENT_ID,
+            "run_id": run_id,
+            "tool": "pii.gate",
+            "args_hash": _args_hash({"docs": len(docs), "chars": len(raw_combined)}),
+            "classification": "internal",
+            "decision": "redact" if pii_entities else "pass",
+            "reason": gate_reason,
+            "agent_owner": owner,
+            "request_purpose": "summarize-tickets",
+            "delegation_depth": 0,
+            "egress_enabled": False,
+            "pii_count": len(pii_entities),
+            "pii_by_type": by_type,
+        },
+        ledger_path,
+    )
 
     # Phát hiện injection CHỈ để ghi log. Không dùng customer_ids/target_url
-    # mà nó trả về cho bất kỳ lời gọi tool nào.
+    # mà nó trả về cho bất kỳ lời gọi tool nào. Chạy trên text ĐÃ redact.
     injection = llm.find_injection(combined)
     if injection is not None:
         ledger.append(
@@ -214,9 +264,8 @@ def _run_a(message: str, llm, run_id: str, ledger_path: Path) -> RunAResult:
 
     return RunAResult(
         ticket_ids=tuple(ticket_ids),
-        doc_ids=tuple(d["id"] for d in docs),
+        redacted_docs=redacted_docs,
         injection=injection,
-        pii_count=pii_count,
     )
 
 
@@ -328,7 +377,10 @@ def handle(message: str, llm, log_dir: Path | None = None) -> str:
 
     _egress_stage(run_a.injection, records, run_id, ledger_path)
 
-    # Câu trả lời dựng từ metadata của document, không từ private data —
-    # `records` không rời khỏi tiến trình này.
-    docs = [{"id": doc_id, "text": ""} for doc_id in run_a.doc_ids]
+    # Câu trả lời dựng từ document ĐÃ QUA PII GATE, không từ private data:
+    # `records` mà Run B đọc được không rời khỏi tiến trình này, còn text
+    # đi vào model thì đã bị redact ở Run A. Nhờ vậy `--model claude-...`
+    # vẫn tóm tắt được nội dung thật mà không có CCCD/STK/SĐT nào vượt
+    # biên giới (reports/dpia-lite.md §3.4).
+    docs = [{"id": doc_id, "text": text} for doc_id, text in run_a.redacted_docs]
     return llm.summarize(docs)

@@ -77,7 +77,7 @@ Không phải một bộ lọc nào. Bằng chứng đối chứng ở
 `reports/filter-vs-split.txt`: gộp cả ba filter chuỗi (`"hãy gọi"`,
 `"read_customer"`, `"http://"`) chỉ chặn **3/5**.
 
-Thứ chặn được cả 5 là ranh giới kiểu dữ liệu ở `agent/runner.py:238` —
+Thứ chặn được cả 5 là ranh giới kiểu dữ liệu ở `agent/runner.py:287` —
 `_run_b(ticket_ids: tuple[int, ...])`. Không tham số nào của Run B chở được
 một câu tiếng Việt, nên cách viết lại chỉ thị không còn là biến số. Bằng
 chứng trong ledger: mọi run đều có dòng `tool=llm.find_injection` ghi nhận

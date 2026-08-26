@@ -4,7 +4,7 @@ Phạm vi: agent hỗ trợ khách hàng trong repo này (`agent/`), chạy ở 
 `--mock`. Toàn bộ dữ liệu là synthetic (xem `README.md` — Quy tắc an toàn),
 nhưng DPIA viết như thể dữ liệu thật, vì kiến trúc mới là thứ được đánh giá.
 
-Ngày lập: 2026-08-26. Phiên bản code tương ứng: commit `bdd0397`.
+Ngày lập: 2026-08-26. Phiên bản code tương ứng: `git log -1 -- agent/runner.py`.
 
 ---
 
@@ -29,7 +29,7 @@ Kèm **tên người** trong văn bản tự do (ví dụ `corpus/ticket-007.md`
 nội dung tuỳ ý vào context của agent — 6 trong 46 file là payload tấn công do
 chính chúng tôi viết ở Bước 2.
 
-Phân loại: `internal` (`agent/runner.py:157`).
+Phân loại: `internal` (`agent/runner.py:160`).
 
 ### `read_customer` — `data/customers.json` (26 bản ghi)
 
@@ -40,7 +40,7 @@ CCCD và số tài khoản là dữ liệu nhạy cảm ở mức cao nhất tro
 là dùng được ngay cho giả mạo danh tính và cho gian lận chuyển khoản, và
 không đổi được như đổi mật khẩu.
 
-Phân loại: `restricted` (`agent/runner.py:252`).
+Phân loại: `restricted` (`agent/runner.py:301`).
 
 ### `http_post` — không tạo dữ liệu mới
 
@@ -58,7 +58,7 @@ Nhưng là nơi dữ liệu hai nhóm trên có thể rời khỏi hệ thống.
 
 Nguyên tắc tối thiểu hoá đang được thực thi bằng code chứ không bằng quy
 định: Run B chỉ đọc khách suy ra từ `ticket_id` qua `related_tickets`
-(`agent/runner.py:223`), nên số bản ghi chạm tới bị giới hạn bởi số ticket
+(`agent/runner.py:272`), nên số bản ghi chạm tới bị giới hạn bởi số ticket
 khớp truy vấn — lần chạy Bước 4 đọc 21/26 khách, không phải toàn bộ.
 
 **Cơ sở pháp lý cần xác định trước khi dùng dữ liệu thật:** hợp đồng dịch vụ
@@ -73,6 +73,14 @@ với khách (xử lý yêu cầu hỗ trợ). Không dựa vào "lợi ích h�
 
 ```
 corpus/*.md ──search_docs──> Run A  (internal, egress=False)
+                               │
+                               ├─ PII gate: pii.detect + pii.sanitize
+                               │  80 entity bị redact TRƯỚC khi vào model
+                               │  (agent/runner.py:196-197)
+                               │
+                               ├─ text ĐÃ redact ──> llm.find_injection()
+                               │                     llm.summarize()
+                               │
                                │  chỉ tuple[int, ...] ticket_id đi tiếp
                                ▼
 customers.json ──read_customer──> Run B  (restricted, egress=False)
@@ -82,14 +90,23 @@ customers.json ──read_customer──> Run B  (restricted, egress=False)
                         không ghi ra file, không lên mạng
 ```
 
-Bản ghi khách sau khi đọc **không rời khỏi tiến trình Python**: câu trả lời
-cuối dựng từ tên file, không từ bản ghi (`agent/runner.py:333-334`).
+Hai điều quan trọng ở sơ đồ này:
+
+1. **Bản ghi khách không rời khỏi tiến trình Python.** Run B đọc được
+   `records` nhưng câu trả lời cuối dựng từ document, không từ `records`
+   (`agent/runner.py:385-386`).
+2. **Không có text thô nào chạm vào model.** `raw_combined` dừng lại ở
+   `agent/runner.py:196`; cả `find_injection()` lẫn `summarize()` chỉ nhận
+   bản đã qua `pii.sanitize()`. Kiểm chứng bằng cách bọc `MockLLM` để ghi lại
+   mọi text nó nhận: 12040 ký tự vào `find_injection`, 11995 ký tự vào
+   `summarize`, không chuỗi PII nào trong cả hai, và cả hai đều chứa
+   `[REDACTED_...]`.
 
 ### 3.2 Ghi ra đĩa
 
 | File | Chứa gì | Có PII không |
 |---|---|---|
-| `reports/ledger.jsonl` | audit trail 144 dòng | **Không.** Chỉ `args_hash` (sha256 rút gọn) và `customer_id` giả danh. Kiểm: `grep 811753472374 reports/ledger.jsonl` → 0 dòng |
+| `reports/ledger.jsonl` | audit trail 150 dòng | **Không.** Chỉ `args_hash` (sha256 rút gọn) và `customer_id` giả danh. Kiểm: `grep 811753472374 reports/ledger.jsonl` → 0 dòng |
 | `reports/sink.log` | do sink server ghi, không phải agent | Sau khi contain: 0 byte |
 
 `customer_id` vẫn là dữ liệu cá nhân giả danh (pseudonymous), không phải dữ
@@ -112,30 +129,37 @@ ra ngoài.
 hoàn toàn trong tiến trình, không gọi network. Toàn bộ lab được chấm bằng
 `--mock`.
 
-**Nếu chạy `--model claude-...`: CÓ.** `RealLLM.summarize()` gửi **toàn văn**
-nội dung ticket sang API của Anthropic (Hoa Kỳ). Nội dung đó chứa PII đã liệt
-kê ở §1: 40 SĐT, 20 CCCD, 13 STK, 7 email. Đây là chuyển dữ liệu cá nhân
-xuyên biên giới theo NĐ 356/2025, kéo theo:
+**Nếu chạy `--model claude-...`: CÓ — nhưng chỉ dữ liệu đã redact.**
+`RealLLM.summarize()` gửi nội dung ticket sang API của Anthropic (Hoa Kỳ).
+Vẫn là chuyển dữ liệu xuyên biên giới, nhưng nội dung đi qua PII gate ở
+`agent/runner.py:196-197` trước, nên 80 entity (40 SĐT, 20 CCCD, 13 STK, 7
+email) đã bị thay bằng `[REDACTED_<TYPE>]`.
 
-- nghĩa vụ lập và nộp hồ sơ đánh giá tác động chuyển dữ liệu ra nước ngoài
-  trong **60 ngày** kể từ khi bắt đầu xử lý;
+Cái **vẫn** vượt biên giới, và vẫn là dữ liệu cá nhân:
+
+- mã khách dạng `KH-000999` (giả danh, không phải ẩn danh);
+- nội dung khiếu nại của khách — văn bản tự do có thể chứa thông tin nhận
+  dạng gián tiếp mà regex không bắt được;
+- tên người không nằm trong `PERSON_DENYLIST` (`agent/pii.py:77`, hiện chỉ
+  có 2 tên hard-code).
+
+Nghĩa vụ theo NĐ 356/2025 **không mất đi** vì đã redact:
+
+- lập và nộp hồ sơ đánh giá tác động chuyển dữ liệu ra nước ngoài trong
+  **60 ngày** kể từ khi bắt đầu xử lý;
 - xác định vai trò của model provider (bên xử lý dữ liệu) và ràng buộc hợp
   đồng tương ứng;
 - thông báo cho chủ thể dữ liệu.
 
-**Control hiện có cho luồng này:** chưa đủ. Hai khoảng trống, ghi rõ để không
-bị hiểu nhầm là đã xử lý:
+**Khoảng trống còn lại:** không có PEP nào chặn giữa agent và LLM API.
+`policy.check()` gác ba tool, không gác lời gọi model — nên hiện tại không
+có dòng ledger nào ghi lại việc dữ liệu rời biên giới, chỉ có dòng
+`pii.gate` ghi lại việc đã redact.
 
-1. `RealLLM.summarize()` gửi text **thô**, không qua `agent.pii.redact()`.
-   Trong khi `pii.redact()` đã có sẵn và đạt recall 1.000 trên test set
-   (`agent/pii.py:151`), nó chưa được nối vào đường `--model`.
-2. Không có PEP nào chặn giữa agent và LLM API. `policy.check()` chỉ gác ba
-   tool, không gác lời gọi model.
-
-**Khuyến nghị trước khi dùng model thật với dữ liệu thật:** đưa
-`pii.redact()` vào trước mọi lời gọi `RealLLM`, và coi lời gọi model là một
-tool call phải qua `_gate()` với `egress_enabled=True` — tức là mặc định bị
-RULE 3 chặn nếu dữ liệu là `restricted`.
+**Khuyến nghị trước khi dùng model thật với dữ liệu thật:** coi lời gọi
+model là một tool call phải qua `_gate()` với `egress_enabled=True`, để nó
+được ghi vào ledger như mọi egress khác và bị RULE 3 chặn khi dữ liệu là
+`restricted`. Đồng thời mở rộng deny-list tên người hoặc bổ sung NER.
 
 ---
 
@@ -145,7 +169,8 @@ RULE 3 chặn nếu dữ liệu là `restricted`.
 |---|---|---|
 | Prompt injection ép agent gửi PII ra ngoài | Cao | **Đã xử lý** — trifecta split, 5/5 biến thể bị chặn, `reports/attack-after.log` |
 | Attacker ghi được vào `corpus/` | Cao | **Đã giảm** — không ghi được vào `customers.json` nên không điều khiển được Run B đọc ai; vẫn có thể gây nhiễu nội dung tóm tắt |
-| PII gửi sang model provider khi dùng `--model` | Cao | **Chưa xử lý** — xem §3.4 |
+| PII gửi sang model provider khi dùng `--model` | Trung bình (từ Cao) | **Đã giảm** — PII gate redact 80 entity trước khi text chạm model (`agent/runner.py:196-197`). Còn lại: mã khách giả danh, văn bản tự do, tên ngoài deny-list — xem §3.4 |
+| Lời gọi LLM API không qua PEP, không vào ledger | Trung bình | **Chưa xử lý** — `policy.check()` chỉ gác 3 tool. Xem khuyến nghị §3.4 |
 | Quyền yêu cầu xoá (Luật 91/2025) | Trung bình | **Chưa implement** — xem `reports/compliance-mapping.md` dòng 1 |
 | Ledger bị xoá cả file (không phải sửa giữa file) | Trung bình | **Chưa xử lý** — hash chain phát hiện sửa/xoá dòng giữa, nhưng xoá sạch file thì không. Cần chốt hash cuối ra nơi khác (WORM store, hoặc log tập trung) |
 | Không có TTL / thu hồi quyền theo thời gian | Thấp trong phạm vi lab | **Chưa implement** |
