@@ -91,3 +91,12 @@ Nộp lại toàn bộ thư mục này (hoặc git repo) sau khi đã:
 4. Có `reports/compliance-mapping.md`, `reports/dpia-lite.md`
 5. `pytest` chạy được (không cần 100% pass — điểm theo `Rubric.md`, nhưng
    đọc kỹ điều kiện trượt)
+
+---
+
+<p align="center">
+  <img src="assets/easter-egg.png" alt="Trùm công nghệ — Cho tôi Claude Code, tôi sẽ nâng cả trái đất lên" width="380">
+</p>
+
+> 🥚 **Easter egg** — nghỉ giải lao tí nào. Tặng các bạn D403 Track 2 buổi
+> sáng 1 cái ảnh của thầy Hiếu.

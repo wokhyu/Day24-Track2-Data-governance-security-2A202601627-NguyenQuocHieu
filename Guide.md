@@ -95,17 +95,6 @@ tối thiểu: `classification == "restricted" and egress_enabled` → deny.
 pytest tests/test_policy.py -v
 ```
 
----
-
-<p align="center">
-  <img src="data/easter-egg.png" alt="Trùm công nghệ — Cho tôi Claude Code, tôi sẽ nâng cả trái đất lên" width="380">
-</p>
-
-> 🥚 **Easter egg** — nghỉ giải lao tí nào. Tặng các bạn D403 Track 2 buổi
-> sáng 1 cái ảnh của thầy Hiếu.
-
----
-
 ### 3c. `agent/runner.py` — trifecta split + egress allowlist (13')
 
 **Phần khó nhất.** Đọc kỹ docstring trong file — có sẵn gợi ý kiến trúc
@@ -130,6 +119,18 @@ pytest tests/test_ledger.py -v
 ```
 
 Sau mỗi bước 3a-3d, commit riêng — 4 commit cho 4 file.
+
+---
+
+<p align="center">
+  <img src="assets/easter-egg-2.png" alt="Thầy Hải Dương nhìn thẳng vào camera, mặt không cảm xúc" width="260">
+</p>
+
+> 🥚 **Easter egg #2** — thầy Hải Dương lúc mở `ledger.jsonl` của bạn ra và
+> thấy dòng thứ 400 vẫn thiếu `reason`. Đừng để thầy phải nhìn như vậy —
+> đó là điều kiện trượt số 1 trong `Rubric.md`.
+
+---
 
 ## Bước 4 — Prove + evidence (20')
 
